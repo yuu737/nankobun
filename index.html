@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>それって身近なもの何個分？</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+1+Code:wght@400;700&family=Zen+Kaku+Gothic+New:wght@400;700;900&display=swap">
+<style>
+  :root { --ink:#1d1f22; --paper:rgba(250,248,243,.86); --sub:#6b6a66; --line:rgba(29,31,34,.18); --accent:#c8553d; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; overflow:hidden; background:#cfd3d4; color:var(--ink);
+    font-family:"Zen Kaku Gothic New","Yu Gothic UI","Hiragino Sans",system-ui,sans-serif; }
+  canvas#view { position:fixed; inset:0; width:100%; height:100%; display:block; cursor:grab; touch-action:none; }
+  canvas#view.drag { cursor:grabbing; }
+  .code { font-family:"M PLUS 1 Code",ui-monospace,monospace; }
+  #brand { position:fixed; top:calc(18px + env(safe-area-inset-top, 0px)); left:calc(22px + env(safe-area-inset-left, 0px)); font-size:14px; letter-spacing:.08em; text-shadow:0 1px 0 rgba(255,255,255,.5); }
+  #brand b { font-size:20px; letter-spacing:.02em; }
+  #brand .sub { color:var(--sub); font-size:11px; margin-top:2px; }
+  #toggles { position:fixed; top:calc(18px + env(safe-area-inset-top, 0px)); right:calc(22px + env(safe-area-inset-right, 0px)); display:flex; gap:14px; font-size:12px; }
+  #toggles button { background:none; border:0; padding:0; font:inherit; color:var(--sub); cursor:pointer; }
+  #toggles button.on { color:var(--ink); text-decoration:underline; text-underline-offset:4px; }
+  #modes { position:fixed; left:calc(22px + env(safe-area-inset-left, 0px)); bottom:calc(26px + env(safe-area-inset-bottom, 0px)); font-size:13px; line-height:2; }
+  #modes button { display:block; background:none; border:0; padding:0; font:inherit; color:var(--ink); cursor:pointer; text-shadow:0 1px 0 rgba(255,255,255,.6); }
+  #modes button span { color:var(--sub); margin-right:8px; font-size:11px; }
+  #modes button.on::after { content:"▍"; margin-left:4px; animation:blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+  #hint { position:fixed; left:50%; bottom:26px; transform:translateX(-50%); font-size:12px; color:var(--ink); background:var(--paper); padding:6px 12px; border-radius:999px; white-space:nowrap; }
+  #card { position:fixed; right:calc(22px + env(safe-area-inset-right, 0px)); bottom:calc(26px + env(safe-area-inset-bottom, 0px)); max-height:calc(100% - 140px); overflow:auto; width:min(380px, calc(100% - 44px)); background:var(--paper); backdrop-filter:blur(8px);
+    border:1px solid var(--line); border-radius:6px; padding:16px 18px; display:none; }
+  #card .name { font-size:15px; font-weight:700; }
+  #card .meta { font-size:11px; color:var(--sub); margin-top:2px; }
+  #card .big { font-size:44px; font-weight:900; line-height:1.05; margin-top:10px; font-variant-numeric:tabular-nums; }
+  #card .big small { font-size:15px; font-weight:700; margin-left:4px; }
+  #card .what { font-size:13px; margin-top:2px; }
+  #card .rows { margin-top:10px; font-size:12px; border-top:1px solid var(--line); }
+  #card .rows div { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--line); }
+  #card .rows div span:last-child { font-variant-numeric:tabular-nums; }
+  #card .note { font-size:10.5px; color:var(--sub); margin-top:8px; line-height:1.55; }
+  #card .warn { color:var(--accent); }
+  #label { position:fixed; transform:translate(-50%,-110%); pointer-events:none; font-size:30px; font-weight:900; color:#fff;
+    text-shadow:0 2px 12px rgba(0,0,0,.45), 0 0 2px rgba(0,0,0,.6); white-space:nowrap; display:none; font-variant-numeric:tabular-nums; }
+  #blabel { position:fixed; transform:translate(-50%,-100%); pointer-events:none; font-size:12px; color:#1d1f22; background:rgba(255,236,200,.92); border:1px solid rgba(0,0,0,.15); padding:3px 8px; border-radius:3px; white-space:nowrap; display:none; }
+  #blabel::after { content:''; position:absolute; left:50%; top:100%; width:1px; height:26px; background:rgba(255,236,200,.95); }
+  #finder { position:fixed; top:calc(78px + env(safe-area-inset-top, 0px)); left:calc(22px + env(safe-area-inset-left, 0px)); width:min(360px, calc(100% - 44px)); }
+  #finder input { width:100%; font:inherit; font-size:12px; padding:7px 10px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink); backdrop-filter:blur(6px); }
+  #unit { margin-top:8px; font-size:12px; text-shadow:0 1px 0 rgba(255,255,255,.6); }
+  #unit button, #card .btns button { font:inherit; font-size:11px; border:1px solid var(--line); background:rgba(255,255,255,.7); border-radius:3px; padding:3px 8px; cursor:pointer; color:var(--ink); }
+  #card .btns { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  #card .frac { display:flex; align-items:center; gap:4px; margin-top:8px; font-size:11.5px; color:var(--sub); }
+  #card .frac button { font:inherit; font-size:11px; border:1px solid var(--line); background:rgba(255,255,255,.7); padding:2px 9px; cursor:pointer; color:var(--ink); }
+  #card .frac button + button { margin-left:-5px; }
+  #card .frac button.on { background:var(--ink); color:#faf8f3; border-color:var(--ink); }
+  #card .say { margin-top:10px; font-size:13px; font-weight:700; line-height:1.55; min-height:1em; }
+  #card .rowsel { display:flex; justify-content:space-between; align-items:center; font-size:12px; margin-top:8px; }
+  #card .rowsel select { font:inherit; font-size:12px; padding:2px 4px; }
+  #slabel { position:fixed; transform:translate(-50%,-100%); pointer-events:none; font-size:12px; color:#1d1f22; background:rgba(255,226,150,.95); border:1px solid rgba(0,0,0,.15); padding:3px 8px; border-radius:3px; white-space:nowrap; display:none; }
+  body.clean #brand, body.clean #toggles, body.clean #modes, body.clean #finder, body.clean #hint, body.clean #card, body.clean #credit { display:none !important; }
+  #loading { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background:#e9e6df; z-index:9; font-size:12px; color:var(--sub); gap:10px; }
+  #loading b { color:var(--ink); font-size:16px; letter-spacing:.1em; }
+  #credit { position:fixed; right:calc(22px + env(safe-area-inset-right, 0px)); bottom:calc(8px + env(safe-area-inset-bottom, 0px)); font-size:10px; color:var(--sub); text-align:right; }
+  #modes i { font-style:normal; } #modes .s { display:none; }
+  #card .more-toggle { display:none; }
+  /* スマホ：上に細い帯（題名・切り替え・検索）、下に比べ方の切り替え、その上に結果の小さな札（押すと詳しく） */
+  @media (max-width:700px) {
+    #hint, #credit { display:none; }
+    #brand { top:calc(10px + env(safe-area-inset-top, 0px)); left:12px; }
+    #brand b { font-size:15px; } #brand .sub { display:none; }
+    #toggles { top:calc(12px + env(safe-area-inset-top, 0px)); right:12px; gap:10px; font-size:11px; }
+    #finder { top:calc(38px + env(safe-area-inset-top, 0px)); left:12px; right:12px; width:auto; }
+    #finder input { padding:6px 8px; font-size:12px; }
+    #unit { margin-top:4px; font-size:11px; }
+    #unit button { font-size:10px; padding:2px 6px; }
+    #modes { left:0; right:0; bottom:0; display:flex; gap:6px; padding:8px 10px calc(8px + env(safe-area-inset-bottom, 0px)); overflow-x:auto;
+      background:var(--paper); backdrop-filter:blur(8px); border-top:1px solid var(--line); line-height:1; font-size:12px; }
+    #modes button { flex:0 0 auto; padding:7px 12px; border:1px solid var(--line); border-radius:999px; background:rgba(255,255,255,.6); text-shadow:none; }
+    #modes button span, #modes .l { display:none; } #modes .s { display:inline; }
+    #modes button.on { background:var(--ink); color:#faf8f3; border-color:var(--ink); }
+    #modes button.on::after { content:none; }
+    #card { left:8px; right:8px; width:auto; bottom:calc(52px + env(safe-area-inset-bottom, 0px)); max-height:55%; padding:10px 12px; border-radius:8px; }
+    #card .name { font-size:13px; } #card .meta { display:none; }
+    #card .big { font-size:30px; margin-top:2px; } #card .big small { font-size:13px; }
+    #card .what { font-size:12px; }
+    #card .say { font-size:12px; margin-top:6px; }
+    #card .btns { margin-top:8px; } #card .btns button { font-size:11px; padding:4px 8px; }
+    #card .more-toggle { display:inline-block; }
+    #card:not(.open) .more { display:none; }
+    #label { font-size:22px; }
+  }
+  #trace { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(20px + env(safe-area-inset-bottom, 0px)); width:min(560px, calc(100% - 16px));
+    background:var(--paper); backdrop-filter:blur(8px); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font-size:12px; }
+  #trace[hidden] { display:none; }
+  #trace .t2 { margin-top:4px; } #trace .t2 b { font-size:22px; font-variant-numeric:tabular-nums; } #trace #tunit { font-weight:700; color:var(--accent); }
+  #trace .btns { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  #trace button { font:inherit; font-size:12px; border:1px solid var(--line); background:rgba(255,255,255,.75); border-radius:3px; padding:5px 10px; cursor:pointer; color:var(--ink); }
+  #trace button.go { background:var(--ink); color:#faf8f3; border-color:var(--ink); }
+  #trace button:disabled { opacity:.4; cursor:default; }
+  #trace .t3 { margin-top:6px; color:var(--sub); font-size:10.5px; }
+  #shot { position:fixed; inset:0; background:rgba(20,20,22,.72); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; z-index:8; padding:16px; }
+  #shot[hidden] { display:none; }
+  #shot img { max-width:min(92vw, 1200px); max-height:76vh; border-radius:4px; box-shadow:0 8px 40px rgba(0,0,0,.4); }
+  #shot p { color:#f4f2ec; font-size:12px; margin:0; }
+  #shot button { font:inherit; font-size:12px; padding:5px 14px; border-radius:3px; border:0; background:#f4f2ec; color:#1d1f22; cursor:pointer; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/jsm/" } }
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="brand" class="code"><b>それって身近なもの何個分？</b><div class="sub">東京ドーム、自分の家、いつもの道。PLATEAU のデータをもとに、身近なもので比べる</div></div>
+<div id="toggles" class="code">
+  <button id="tEye" class="on">目の高さ</button>
+  <button id="tSky">見渡す</button>
+  <button id="tSound">音</button>
+</div>
+<div id="credit" class="code">3D都市モデル：国土交通省 PLATEAU（文京区・千代田区 2025年度）を加工 ／ 駅：国土数値情報（鉄道データ）を加工</div>
+<div id="modes" class="code">
+  <button data-m="h" class="on"><span>01</span>高さ</button>
+  <button data-m="area"><span>02</span><i class="l">面積（足元）</i><i class="s">面積</i></button>
+  <button data-m="vol"><span>03</span>体積</button>
+  <button data-m="dist"><span>04</span><i class="l">駅までの距離（倒して並べる）</i><i class="s">駅まで</i></button>
+  <button data-m="trace"><span>05</span><i class="l">道をなぞる</i><i class="s">なぞる</i></button>
+</div>
+<div id="finder" class="code">
+  <input id="q" list="qlist" placeholder="建物・駅・タワーの名前で探す（例：文京区役所、水道橋駅、スカイツリー）" autocomplete="off">
+  <datalist id="qlist"></datalist>
+  <div id="unit"></div>
+</div>
+<div id="hint" class="code">ドラッグで見回す ・ W A S D で歩く ・ 建物をクリックで測る ・ H で文字を隠す</div>
+<div id="card"></div>
+<div id="trace" class="code" hidden>
+  <div class="t1">道に沿って、地図をタップ（クリック）して点を打つ</div>
+  <div class="t2"><b id="tlen">0 m</b> <span id="tpts"></span> <span id="tunit"></span></div>
+  <div class="btns">
+    <button id="tUndo">1つ戻す</button><button id="tClear">やり直す</button>
+    <button id="tUnit">この道を物差しにする</button><button id="tGo" class="go">この道を測る</button><button id="tExit">やめる</button>
+  </div>
+  <div class="t3">ドラッグで地図を動かす ・ ホイール／2本指で拡大・縮小</div>
+</div>
+<div id="label" class="code"></div>
+<div id="blabel" class="code"></div>
+<div id="slabel" class="code"></div>
+<div id="shot" class="code" hidden><img id="shotimg" alt="結果の画像"><p>長押し（パソコンは右クリック）で画像を保存できます</p><button id="shotclose">閉じる</button></div>
+<div id="loading" class="code"><b>それって身近なもの何個分？</b><span id="loadmsg">PLATEAU を読み込み中…</span></div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
