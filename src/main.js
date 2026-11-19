@@ -848,18 +848,18 @@ function measureTower(T) {
   const ring = [];
   for (let i = 0; i < 16; i++) { const a = (i / 16) * 2 * Math.PI; ring.push([tx + Math.cos(a) * mk0.R, -(tz + Math.sin(a) * mk0.R)]); }
   const rec = { name: T.name, h: T.h, H: T.h, area: Math.PI * mk0.R * mk0.R, vol: null, z0: y0, rings: [ring], usage: null, fl: null, p: null, tower: null, towerT: T };
-  if (unit.kind !== 'route') return measureSize(rec, false);
+  if (unit.kind !== 'route') { measureSize(rec, false); if (effect) effect.labUp = Math.max(12, T.h * 0.2); return; }
   // いつもの道を立てて、タワーの高さまで積む
   const face = faceTo(tx, tz), rx = face[1], rz = -face[0];
   const ax = tx + rx * (mk0.R + 40), az = tz + rz * (mk0.R + 40);
   const st = arrowStack({ x: ax, z: az, seg: unit.len, total: T.h, face, unitWord: '本' });
   effect = {
     kind: 'size', view: 'stack', C: new THREE.Vector3((ax + tx) / 2, y0 + T.h / 2, (az + tz) / 2), top: y0 + T.h, x: ax, z: az, count: 0, ratio: st.ratio, n: st.n, t: 0, val: T.h, rec, isDome: false,
-    bx: tx, bz: tz, btop: y0 + T.h, bname: `${T.name}  ${num(T.h)} m`, dur: st.dur,
+    bx: tx, bz: tz, btop: y0 + T.h, bname: `${T.name}  ${num(T.h)} m`, dur: st.dur, labUp: Math.max(12, T.h * 0.2),
   };
   renderCard();
   const lx = ax + rx * (st.w * 3 + st.size * 1.1), lz = az + rz * (st.w * 3 + st.size * 1.1);
-  frameView(boxPoints([[tx, tz, mk0.R, y0, y0 + T.h], [ax, az, st.w * 2, y0, y0 + T.h], [lx, lz, 4, y0, y0 + T.h]]), (lx + tx) / 2, (lz + tz) / 2, y0 + T.h * 0.45, THREE.MathUtils.clamp(T.h * 0.35, 0, 450));
+  frameView(boxPoints([[tx, tz, mk0.R, y0, y0 + T.h], [ax, az, st.w * 2, y0, y0 + T.h * 1.3], [lx, lz, 4, y0, y0 + T.h]]), (lx + tx) / 2, (lz + tz) / 2, y0 + T.h * 0.5, THREE.MathUtils.clamp(T.h * 0.35, 0, 450));   // 上の 30%：数字（labUp）まで入れる
 }
 // 物差しがタワーの時の道：道を立てて、タワーの高さの赤い矢印が何本分かを積む
 function standPath(P, meta) {
@@ -878,11 +878,11 @@ function standPath(P, meta) {
   effect = {
     kind: 'path', view: 'stack', C: new THREE.Vector3((ax + tx) / 2, y0 + top / 2, (az + tz) / 2), top: y0 + Math.max(len, 30), x: ax, z: az, count: 0, ratio: st.ratio, n: st.n, t: 0, val: len,
     dur: st.dur, title: meta.title, from: meta.from, to: meta.to, straight: !!meta.straight, list: meta.list, rec: meta.rec, isDome: meta.isDome, path: P,
-    bx: tx, bz: tz, btop: y0 + T.h, bname: `${T.name}  ${num(T.h)} m`,
+    bx: tx, bz: tz, btop: y0 + T.h, bname: `${T.name}  ${num(T.h)} m`, labUp: Math.max(12, top * 0.2),
   };
   renderCard();
   const lx = ax + rx * (st.w * 3 + st.size * 1.1), lz = az + rz * (st.w * 3 + st.size * 1.1);
-  frameView(boxPoints([[tx, tz, mk0.R, y0, y0 + T.h], [ax, az, st.w * 2, y0, y0 + top], [lx, lz, 4, y0, y0 + top]]), (lx + tx) / 2, (lz + tz) / 2, y0 + top * 0.45, THREE.MathUtils.clamp(top * 0.35, 0, 600));
+  frameView(boxPoints([[tx, tz, mk0.R, y0, y0 + T.h], [ax, az, st.w * 2, y0, y0 + top * 1.3], [lx, lz, 4, y0, y0 + top]]), (lx + tx) / 2, (lz + tz) / 2, y0 + top * 0.5, THREE.MathUtils.clamp(top * 0.35, 0, 600));
 }
 
 // 駅まで：建物の端から駅まで直線
@@ -1276,7 +1276,7 @@ function step(dt) {
     const big = $('bignum');
     if (big) big.textContent = txt;
     if ($('say')) $('say').textContent = doneAll ? sentence() : '';
-    const p = toScreen(effect.x, Math.min(effect.top, effect.C.y * 2) + 12, effect.z);
+    const p = toScreen(effect.x, Math.min(effect.top, effect.C.y * 2) + (effect.labUp ?? 12), effect.z);   // labUp：塔の名札と重ならないよう、数字を上げる高さ [m]
     if (p.ok && effect.t > 1.0) { lab.style.display = 'block'; lab.style.left = `${p.x}px`; lab.style.top = `${p.y}px`; lab.textContent = `${txt} ${ctrOf()}`; } else lab.style.display = 'none';
     const q = toScreen(effect.bx, effect.btop + 4, effect.bz);
     if (effect.bname && q.ok) { bl.style.display = 'block'; bl.style.left = `${q.x}px`; bl.style.top = `${q.y - 26}px`; bl.textContent = effect.bname; } else bl.style.display = 'none';
