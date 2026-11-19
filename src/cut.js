@@ -181,6 +181,9 @@ function rimGeometry(shape, y) {
   return geo;
 }
 
+// 切り落とした側の見た目（淡い無彩色・薄く）。dome.js の cutStep もこの濃さから消していく
+export const OFF_COLOR = '#d6d3cd';
+export const OFF_OPACITY = 0.3;
 // obj（物差し 1 個）を、親の座標の平面 n·p = d で切る。n の側（はみ出た分）を off、残りを keep として返す
 export function cutUnit(obj, shape, n, d) {
   obj.updateMatrix();
@@ -202,7 +205,8 @@ export function cutUnit(obj, shape, n, d) {
       const geo = clipGeometry(m.geometry, pl);
       if (!geo) return;
       let mat = m.material;
-      if (fade) { mat = Array.isArray(mat) ? mat.map((x) => x.clone()) : mat.clone(); for (const x of [].concat(mat)) { x.transparent = true; mats.push(x); } }
+      // 切り落とした側は、模様を外した淡い灰色で薄く（数える側だけが濃く見えるように。赤は使わない）
+      if (fade) { mat = Array.isArray(mat) ? mat.map((x) => x.clone()) : mat.clone(); for (const x of [].concat(mat)) { x.transparent = true; x.opacity = OFF_OPACITY; x.depthWrite = false; x.map = null; x.color?.set(OFF_COLOR); if (x.emissive) x.emissive.set('#000000'); x.needsUpdate = true; mats.push(x); } }
       const mesh = new THREE.Mesh(geo, mat);
       mesh.castShadow = !fade; mesh.receiveShadow = true;
       mesh.matrixAutoUpdate = false; mesh.matrix.copy(M);
@@ -212,7 +216,7 @@ export function cutUnit(obj, shape, n, d) {
     if (cg) {
       const cm = fade ? capMat.clone() : capMat;
       // 消えていく側の切り口は赤にしない（半透明の赤は空と混ざってピンクに見えるため、地の色で塞ぐ）
-      if (fade) { cm.color.set('#e4dfd6'); cm.transparent = true; mats.push(cm); }
+      if (fade) { cm.color.set(OFF_COLOR); cm.transparent = true; cm.opacity = OFF_OPACITY; cm.depthWrite = false; mats.push(cm); }
       grp.add(new THREE.Mesh(cg, cm));
     }
     if (!fade && Math.abs(planeLocal.normal.y) > 0.9) {

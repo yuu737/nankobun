@@ -12,7 +12,7 @@ import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { buildCity, buildBuilding, Builder, SINK, makeBuildingMaker } from './city.js';
 import { DropKit, fitDome, makeDomeMaker } from './dome.js';
-import { domeShape, prismShape } from './cut.js';
+import { domeShape, prismShape, OFF_COLOR, OFF_OPACITY } from './cut.js';
 import { TOWERS, towerKit } from './tower.js';
 import * as SND from './audio.js';
 
@@ -31,6 +31,8 @@ const canvas = $('view');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
 // スマホなど（指で触る・画面が小さい）は軽くする：画素比 1、影を粗く、接地の陰りとぼかしを切る
 const LITE = matchMedia('(pointer: coarse)').matches || Math.min(innerWidth, innerHeight) < 600;
+// 撮影用の表示（?film=1）：ざらつき・霞・ぼかしを切り、街を淡い灰に沈めて物差しを目立たせる（動画の書き出し用）
+const FILM = new URLSearchParams(location.search).get('film') === '1';
 renderer.setPixelRatio(Math.min(devicePixelRatio, LITE ? 1 : 1.5));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -48,6 +50,7 @@ const sky = new Sky();
 sky.scale.setScalar(20000);
 const su = sky.material.uniforms;
 su.turbidity.value = 9; su.rayleigh.value = 0.75; su.mieCoefficient.value = 0.009; su.mieDirectionalG.value = 0.82;
+if (new URLSearchParams(location.search).get('film') === '1') { su.turbidity.value = 3; su.rayleigh.value = 1.6; su.mieCoefficient.value = 0.004; }
 const sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 30), THREE.MathUtils.degToRad(218));
 su.sunPosition.value.copy(sunDir);
 scene.add(sky);
@@ -82,14 +85,14 @@ composer.addPass(bokeh);
 composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.12, 0.35, 0.92));
 composer.addPass(new OutputPass());
 const grade = new ShaderPass({
-  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uRes: { value: new THREE.Vector2(innerWidth, innerHeight) } },
+  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uRes: { value: new THREE.Vector2(innerWidth, innerHeight) }, uFilm: { value: FILM ? 1 : 0 } },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
   fragmentShader: `
-    uniform sampler2D tDiffuse; uniform float uTime; uniform vec2 uRes; varying vec2 vUv;
+    uniform sampler2D tDiffuse; uniform float uTime; uniform vec2 uRes; uniform float uFilm; varying vec2 vUv;
     float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
     void main(){
       vec2 d = vUv - 0.5;
-      float ca = dot(d,d) * 0.004;
+      float ca = dot(d,d) * 0.004 * (1.0 - uFilm);
       vec3 c = vec3(texture2D(tDiffuse, vUv + d*ca).r, texture2D(tDiffuse, vUv).g, texture2D(tDiffuse, vUv - d*ca).b);
       float l = dot(c, vec3(0.299,0.587,0.114));
       // 暗部はわずかに青緑、明部は暖かく（写真の色づくり）
@@ -98,8 +101,8 @@ const grade = new ShaderPass({
       c = 0.02 + c * 0.97;
       c = mix(c, c * c * (3.0 - 2.0 * c), 0.4);
       c = mix(vec3(dot(c, vec3(0.299,0.587,0.114))), c, 0.88);
-      c *= 1.0 - dot(d,d) * 0.45;
-      c += (h(vUv * uRes + uTime) - 0.5) * 0.03;
+      c *= 1.0 - dot(d,d) * 0.45 * (1.0 - uFilm);
+      c += (h(vUv * uRes + uTime) - 0.5) * 0.03 * (1.0 - uFilm);
       gl_FragColor = vec4(c, 1.0);
     }`,
 });
@@ -123,6 +126,20 @@ await new Promise((r) => setTimeout(r, 30));
 const domeRec = data.buildings.find((b) => b.name === '東京ドームシティー') ?? data.buildings.reduce((a, b) => (b.area > a.area ? b : a));
 const city = buildCity(data, renderer, domeRec.id);
 scene.add(city.group);
+// 淡い灰の街（引いて数える絵の時だけ。撮影用）：建物は模様なしの淡い灰、地面は一段暗い灰
+let flatSaved = null;
+function setFlat(on) {
+  const mats = [...city.mats.wall, ...city.mats.store, city.mats.roof].filter(Boolean);
+  const planes = []; city.group.traverse((o) => { if (o.isMesh && o.geometry?.type === 'PlaneGeometry') planes.push(o.material); });
+  if (on && !flatSaved) {
+    flatSaved = [...mats, ...planes].map((m) => [m, m.map, m.color?.clone(), m.emissive?.clone()]);
+    for (const m of mats) { m.map = null; m.color?.set('#bdb9b1'); if (m.emissive) m.emissive.set('#000000'); m.needsUpdate = true; }
+    for (const m of planes) { m.map = null; m.color.set('#8a867f'); m.needsUpdate = true; }
+  } else if (!on && flatSaved) {
+    for (const [m, map, c, e] of flatSaved) { m.map = map; if (c) m.color.copy(c); if (e) m.emissive.copy(e); m.needsUpdate = true; }
+    flatSaved = null;
+  }
+}
 const ground3 = (X, Z) => city.ground(X, -Z);
 
 const fit = fitDome(domeRec);
@@ -130,6 +147,7 @@ const makeDome = makeDomeMaker(fit);
 const realDome = makeDome();
 realDome.position.set(fit.cx, domeRec.z0 - 0.5, fit.cz);
 scene.add(realDome);
+let domeK = 1;   // 本物の位置のドームの見える高さ（1＝そのまま、0＝沈んで消える）
 const kit = new DropKit(scene);
 
 // 物差し：東京ドーム（PLATEAU 基準）か、選んだ建物
@@ -288,6 +306,7 @@ let sinkTarget = 1;
 const AUTO_RETURN = 3.0;   // 結果が出てから街が戻るまで [秒]
 function restore() {
   sinkTarget = 1;
+  fadeCity(false); wardMode(false);
   kit.clear();
   effect = null; selected = null;
   showHighlight(null);
@@ -376,6 +395,8 @@ function compare(sel) {
   if (trace.on) endTrace(false);
   selected = sel;
   kit.clear();
+  fadeCity(false); wardMode(false);
+  if (sel.ward) return measureWard();
   if (sel.town) return measureTown(sel.town);
   if (sel.tower) return measureTower(sel.tower);
   const isDome = !!sel.dome;
@@ -388,10 +409,10 @@ function compare(sel) {
 }
 
 // 物差しを降らせる並べ方。高さ：積む／面積：地面に並べる／体積：積み木のように積む。端数は最後の 1 個を切る（または縮める）
-function dropPlan(m, ratio, ox, oz, right, back) {
+function dropPlan(m, ratio, ox, oz, right, back, grid10 = false) {
   const n = Math.floor(ratio + 1e-9), f = ratio - n;
   const drops = [];
-  const MAXN = m === 'h' ? 60 : 200;
+  const MAXN = m === 'h' ? 60 : grid10 ? 1000 : 200;
   let height = unit.h, width = 2 * unit.R;
   if (m === 'h') {
     const cnt = Math.min(n, MAXN);
@@ -406,8 +427,8 @@ function dropPlan(m, ratio, ox, oz, right, back) {
     height = Math.max(ratio, 1) * unit.h;
   } else {
     const total = Math.min(n, MAXN) + (f > 0.005 || n === 0 ? 1 : 0);
-    const cols = m === 'area' ? Math.ceil(Math.sqrt(total)) : Math.ceil(Math.cbrt(total));
-    const perLayer = m === 'area' ? total : cols * cols;
+    const cols = grid10 ? 10 : m === 'area' ? Math.ceil(Math.sqrt(total)) : Math.ceil(Math.cbrt(total));   // grid10：10 個ずつの列（数えやすく）
+    const perLayer = grid10 ? 100 : m === 'area' ? total : cols * cols;
     const sp = 2.08 * unit.R;
     for (let i = 0; i < total; i++) {
       const layer = Math.floor(i / perLayer), k = i % perLayer;
@@ -416,7 +437,7 @@ function dropPlan(m, ratio, ox, oz, right, back) {
       const last = i === total - 1 && (f > 0.005 || n === 0);
       const q = ratio < 1 ? ratio : f;
       const fin = last && fracMode !== 'cut' ? (m === 'area' ? [Math.sqrt(q), 1, Math.sqrt(q)] : [Math.cbrt(q), Math.cbrt(q), Math.cbrt(q)]) : null;
-      const cut = last && fracMode === 'cut' ? { n: right.clone(), q, byVolume: m === 'vol', sep: Math.max(10, unit.R * 0.7) } : null;
+      const cut = last && fracMode === 'cut' ? { n: right.clone(), q, byVolume: m === 'vol', sep: unit.R * 2.4 } : null;
       drops.push({ x, z, y: ground3(x, z) + layer * unit.h, final: fin, cut });
     }
     width = cols * sp;
@@ -454,8 +475,12 @@ function boxPoints(list) {
 function measureSize(rec, isDome) {
   if (unit.kind === 'tower') forceHeight();   // タワーは高さだけ（足元・体積は PLATEAU に無い）
   if (unit.kind === 'route') return measureHeightByRoute(rec, isDome);
+  // 面積（足元）は、真上から足元の形にマスを敷き詰める
+  if (mode === 'area' && unit.area) return tileArea(rec.rings[0].map(([x, y]) => [x, -y]), { rec, isDome });
   const val = { h: rec.h ?? rec.H, area: rec.area, vol: rec.vol }[mode];
   const ratio = val / unit[mode];
+  // 体積で数が何百にもなる時（東京ドームを一軒家で数える など）は、100 軒の段・1000 軒の立方体にまとめて降らせる
+  if (mode === 'vol' && ratio > 300 && unit.kind === 'bldg') return packVolume(rec, isDome, val, ratio);
   const [bx, bz] = isDome ? [fit.cx, fit.cz] : centroid(rec);
   const rB = Math.sqrt(rec.area / Math.PI);
   const { right, back } = sideOf(bx, (rec.z0 ?? 0) + 10, bz);
@@ -479,6 +504,67 @@ function measureSize(rec, isDome) {
   else for (const d of plan.drops) boxes.push([d.x, d.z, unit.R, d.y, d.y + unit.h]);
   renderCard();
   frameView(boxPoints(boxes), midX, midZ, yL + showH * 0.42, 0);
+}
+
+// ---------- 体積を、小さな物差し（一軒家など）で数える：10×10 の段（100 軒）を 10 段積んで 1000 軒の立方体 ----------
+// 見える数＝答え：段は着くと +100、余りの家は 1 軒ずつ +1、最後の 1 軒は高さで切る（端数）
+function packVolume(rec, isDome, val, ratio) {
+  const n = Math.floor(ratio + 1e-9), f = ratio - n;
+  const nLayers = Math.floor(n / 100), rest = n % 100;
+  const ring = unit.rec.rings[0];
+  let mnx = 1e9, mxx = -1e9, mny = 1e9, mxy = -1e9;
+  for (const [x, y] of ring) { mnx = Math.min(mnx, x); mxx = Math.max(mxx, x); mny = Math.min(mny, y); mxy = Math.max(mxy, y); }
+  const gap = 1.5, dx = (mxx - mnx) + gap, dz = (mxy - mny) + gap, dy = unit.h;
+  const cubeW = dx * 10, cubeD = dz * 10;
+  const [bx, bz] = isDome ? [fit.cx, fit.cz] : centroid(rec);
+  const { right, back } = sideOf(bx, (rec.z0 ?? 0) + 10, bz);
+  const off = (isDome ? Math.max(fit.ax, fit.az) : Math.sqrt(rec.area / Math.PI)) + 30;
+  const ox = bx + right.x * off, oz = bz + right.z * off, yL = ground3(ox, oz);
+  const cubes = Math.ceil((nLayers + (rest || f > 0.005 ? 1 : 0)) / 10);
+  // 立方体の場所（right の向きに並べる）
+  const at = (cube, i, j, layer) => {
+    const cx = ox + right.x * (cube * (cubeW + 12) + i * dx) + back.x * (j * dz);
+    const cz = oz + right.z * (cube * (cubeW + 12) + i * dx) + back.z * (j * dz);
+    return [cx, yL + layer * dy, cz];
+  };
+  const layerUnit = { R: Math.max(cubeW, cubeD) / 2, make: () => {
+    const g = new THREE.Group();
+    for (let i = 0; i < 10; i++) for (let j = 0; j < 10; j++) { const h = unit.make(); h.position.set(right.x * i * dx + back.x * j * dz, 0, right.z * i * dx + back.z * j * dz); g.add(h); }
+    return g;
+  } };
+  let count = 0;
+  const steps = [];
+  for (let L = 0; L < nLayers; L++) steps.push({ kind: 'layer', cube: Math.floor(L / 10), layer: L % 10 });
+  for (let r = 0; r < rest; r++) steps.push({ kind: 'one', cube: Math.floor(nLayers / 10), layer: nLayers % 10, i: r % 10, j: Math.floor(r / 10) });
+  if (f > 0.005) steps.push({ kind: 'frac', cube: Math.floor(nLayers / 10), layer: nLayers % 10, i: rest % 10, j: Math.floor(rest / 10) });
+  const tLayers = Math.min(6, nLayers * 0.2), tRest = Math.min(3, rest * 0.03);
+  let q = 0;
+  steps.forEach((st) => {
+    let delay;
+    if (st.kind === 'layer') delay = 1.2 + (nLayers > 1 ? (st.cube * 10 + st.layer) / (nLayers - 1) * tLayers : 0);
+    else delay = 1.2 + tLayers + 0.4 + (q++) * (tRest / Math.max(rest, 1));
+    if (st.kind === 'layer') {
+      const [x, y, z] = at(st.cube, 0, 0, st.layer);
+      kit.drop({ unit: layerUnit, x, z, yLand: y, delay, dropFrom: 260, onLand: () => { count += 100; effect.count = count; SND.thump(0.7); SND.tick(count / 100); } });
+    } else {
+      const [x, y, z] = at(st.cube, st.i, st.j, st.layer);
+      kit.drop({ unit, x, z, yLand: y, delay, dropFrom: 120,
+        cut: st.kind === 'frac' ? { n: new THREE.Vector3(0, 1, 0), d: f * unit.h, sep: Math.max(4, unit.h * 0.6) } : null,
+        onLand: () => { if (st.kind === 'one') { count += 1; effect.count = count; } },
+        onSquash: () => { fracSound(); effect.squeezing = true; } });
+    }
+  });
+  const dur = 1.2 + tLayers + 0.4 + tRest + 2.2;
+  const width = cubes * (cubeW + 12), height = 10 * dy;
+  const C = new THREE.Vector3(ox + right.x * width / 2 + back.x * cubeD / 2, yL + height / 2, oz + right.z * width / 2 + back.z * cubeD / 2);
+  const bh = rec.h ?? rec.H;
+  effect = {
+    kind: 'size', C, top: yL + height, x: C.x, z: C.z, count: 0, ratio, n, t: 0, val, rec, isDome,
+    bx, bz, btop: isDome ? domeRec.z0 + domeRec.h : rec.z0 + bh, bname: isDome ? null : `${nameOf(rec)}`, dur, packed: { layers: nLayers, rest, cubes },
+  };
+  renderCard();
+  const pts = [[bx, bz, isDome ? Math.max(fit.ax, fit.az) : 20, yL, yL + bh], [C.x, C.z, Math.max(width, cubeD) / 2, yL, yL + height]];
+  frameView(boxPoints(pts), (C.x + bx) / 2, (C.z + bz) / 2, yL + 30, 120);
 }
 
 // 物差しが「いつもの道」の時の高さ：道を立てて、建物の横に柱にする
@@ -543,17 +629,51 @@ function ribbon(P, s0, s1, w, lift, mat) {
 const lineMat = new THREE.MeshBasicMaterial({ color: '#ffcf6b', transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -6 });
 const bandMats = ['#F1C232', '#2B2E33'].map((c) => new THREE.MeshBasicMaterial({ color: c, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -8 }));
 
+// なぞった道と同じ長さのまっすぐな線（出発から到着の向き。範囲からはみ出すなら少しずつ回す。straightenPath と同じ決め方）
+function straightLine(P) {
+  const len = pathLen(P), O = P[0], end = P[P.length - 1];
+  let ang = Math.atan2(end[1] - O[1], end[0] - O[0]);
+  for (const da of [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9, 1.2, -1.2, 1.6, -1.6, 2.2, -2.2, Math.PI]) {
+    const ex = O[0] + Math.cos(ang + da) * len, ez = O[1] + Math.sin(ang + da) * len;
+    if (Math.max(Math.abs(ex), Math.abs(ez)) < 1350) { ang += da; break; }
+  }
+  return [[O[0], O[1]], [O[0] + Math.cos(ang) * len, O[1] + Math.sin(ang) * len]];
+}
 // 道に沿って測る。いつもの道が物差しなら、いつもの道の長さごとの帯を敷く。建物・ドームが物差しなら、倒して並べる
 function layPath(P, meta) {
   kit.clear();
   sinkTarget = 0;
   SINK.select(meta.keep ?? []);
   if (unit.kind === 'route' && !meta.straight && meta.view !== 'along') return straightenPath(P, meta);
-  if (unit.kind === 'tower') return standPath(P, meta);
+  // 物差しがタワーの時：なぞった道はまっすぐに直して、その上にタワーを倒して並べる（駅までは元から直線）。
+  // 元の道は細い線で残す。前は standPath（道を立てて塔の高さの矢印を積む）だった
+  let towerDelay = 0;
+  if (unit.kind === 'tower') {
+    if (P.length > 2) {
+      const wT = THREE.MathUtils.clamp(pathLen(P) / 90, 6, 16);
+      meta = { ...meta, traced: P };
+      const Ps = straightLine(P), L0 = pathLen(P), N = Math.max(2, Math.ceil(L0 / 4));
+      const cv = [], st = [];
+      for (let k = 0; k <= N; k++) { const a = pathAt(P, L0 * k / N), b = pathAt(Ps, L0 * k / N); cv.push([a.x, a.z]); st.push([b.x, b.z]); }
+      // なぞった黄の帯そのものが、端から順に引っぱられて、ほどけてまっすぐになる（長さは変えない）。曲がった帯は残さない
+      const tape = new THREE.Group(); scene.add(tape);
+      let last = -1;
+      const sm = (x) => { x = THREE.MathUtils.clamp(x, 0, 1); return x * x * (3 - 2 * x); };
+      kit.live.push({ kind: 'custom', root: tape, t: 0, update(t) {
+        const g = THREE.MathUtils.clamp((t - 0.3) / 1.8, 0, 1);
+        if (Math.abs(g - last) < 1e-3) return; last = g;
+        tape.clear();
+        const Q = cv.map((c, k) => { const e = sm(g * 1.6 - (k / N) * 0.6); return [c[0] + (st[k][0] - c[0]) * e, c[1] + (st[k][1] - c[1]) * e]; });
+        tape.add(ribbon(Q, 0, pathLen(Q), wT, 0.8, tapeMat));
+      } });
+      towerDelay = 2.0;   // まっすぐになってから寝かせ始める
+      P = Ps;
+    }
+  }
   const len = pathLen(P);
   let ratio, items = 0, dur, n;
   const line = ribbon(P, 0, len, 1.6, 0.35, lineMat);
-  scene.add(line); kit.live.push({ kind: 'static', root: line, t: 0 });
+  if (!meta.traced) { scene.add(line); kit.live.push({ kind: 'static', root: line, t: 0 }); }   // なぞった道は黄の帯がまっすぐになるので、細い線は出さない
   let landed = 0;
   if (unit.kind === 'route') {
     ratio = len / unit.len;
@@ -577,14 +697,14 @@ function layPath(P, meta) {
     for (const it of list) {
       const s = it.i * unit.h, p = pathAt(P, s), q = pathAt(P, Math.min(s + unit.h * 0.5, len));
       kit.topple({
-        unit, x: p.x, y: ground3(p.x, p.z), z: p.z, dir: new THREE.Vector3(q.dx, 0, q.dz), delay: 1.0 + it.i * interval,
+        unit, x: p.x, y: ground3(p.x, p.z), z: p.z, dir: new THREE.Vector3(q.dx, 0, q.dz), delay: 1.0 + towerDelay + it.i * interval,
         final: fracMode === 'cut' ? 1 : it.final,
         cut: fracMode === 'cut' && it.final < 0.999 ? { n: new THREE.Vector3(0, 1, 0), d: it.final * unit.h, sep: Math.max(10, unit.h * 0.35) } : null,
         onLand: () => { landed++; if (landed < 40 || landed % 10 === 0) { SND.thump(0.6); SND.tick(landed); } effect.count = Math.min(landed, n); },
         onSquash: () => { fracSound(); effect.squeezing = true; },
       });
     }
-    items = list.length; dur = 1.0 + list.length * interval + 1.3;
+    items = list.length; dur = 1.0 + towerDelay + list.length * interval + 1.3;
   }
   // 駅の光の柱
   const end = P[P.length - 1];
@@ -597,7 +717,7 @@ function layPath(P, meta) {
   const yM = ground3(mid.x, mid.z), th = unit.kind === 'route' ? 6 : Math.max(unit.depth, 6);
   effect = {
     kind: 'path', C: new THREE.Vector3(mid.x, yM, mid.z), top: yM + th, x: mid.x, z: mid.z, count: 0, ratio, n, t: 0, val: len, dur,
-    title: meta.title, from: meta.from, to: meta.to, straight: !!meta.straight, list: meta.list, rec: meta.rec, isDome: meta.isDome, path: P, view: 'along',
+    title: meta.title, from: meta.from, to: meta.to, straight: !!meta.straight, list: meta.list, rec: meta.rec, isDome: meta.isDome, path: meta.traced ?? P, view: 'along',
     bx: meta.bx ?? P[0][0], bz: meta.bz ?? P[0][1], btop: meta.btop ?? (ground3(P[0][0], P[0][1]) + 10), bname: meta.bname ?? (meta.from ? null : '出発'),
     sx: end[0], sz: end[1], sy: ground3(end[0], end[1]) + (meta.station ? 125 : 12), sname: meta.to ?? '到着',
     shown: items < n ? items : null,
@@ -945,15 +1065,260 @@ function measureTown(name) {
   frameView(boxPoints(boxes), (cx + C.x) / 2, (cz + C.z) / 2, yL + Math.min(Math.max(plan.height, topH - yL), 400) * 0.42, 60);
 }
 
+// ---------- 広さ：真上から、街を透かして、物差しの足元と同じ広さのマスをすき間なく敷き詰める ----------
+// 1 マス＝物差しの足元の面積（正方形）。測る形からはみ出すマスは形の境で切り、切った側は淡く。
+// 数える数＝マスの数（欠けたマスはその割合）＝形の面積 ÷ 物差しの足元の面積
+const tileMats = ['#F1C232', '#E0AE1E'].map((c) => new THREE.MeshBasicMaterial({ color: c, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -8 }));
+const tileOffMat = new THREE.MeshBasicMaterial({ color: OFF_COLOR, transparent: true, opacity: OFF_OPACITY, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -6 });
+const tileLineMat = new THREE.LineBasicMaterial({ color: '#2B2E33' });
+const outlineMat = new THREE.MeshBasicMaterial({ color: '#C8372B', side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -10 });
+function polyArea(P) { let a = 0; for (let i = 0; i < P.length; i++) { const [x0, z0] = P[i], [x1, z1] = P[(i + 1) % P.length]; a += x0 * z1 - x1 * z0; } return Math.abs(a) / 2; }
+// 多角形 P を、軸にそろった四角 [x0, x1]×[z0, z1] で切る（Sutherland–Hodgman。P は凹んでいてもよい）
+function clipRect(P, x0, z0, x1, z1) {
+  let out = P;
+  const edges = [[(p) => p[0] >= x0, (a, b) => [x0, a[1] + (b[1] - a[1]) * (x0 - a[0]) / (b[0] - a[0])]],
+    [(p) => p[0] <= x1, (a, b) => [x1, a[1] + (b[1] - a[1]) * (x1 - a[0]) / (b[0] - a[0])]],
+    [(p) => p[1] >= z0, (a, b) => [a[0] + (b[0] - a[0]) * (z0 - a[1]) / (b[1] - a[1]), z0]],
+    [(p) => p[1] <= z1, (a, b) => [a[0] + (b[0] - a[0]) * (z1 - a[1]) / (b[1] - a[1]), z1]]];
+  for (const [inside, cross] of edges) {
+    const inp = out; out = [];
+    for (let i = 0; i < inp.length; i++) {
+      const a = inp[(i + inp.length - 1) % inp.length], b = inp[i];
+      if (inside(b)) { if (!inside(a)) out.push(cross(a, b)); out.push(b); } else if (inside(a)) out.push(cross(a, b));
+    }
+    if (!out.length) break;
+  }
+  return out;
+}
+function flatMesh(P, y, mat) {
+  const sh = new THREE.Shape(P.map(([x, z]) => new THREE.Vector2(x, z)));
+  const g = new THREE.ShapeGeometry(sh); g.rotateX(Math.PI / 2);
+  const m = new THREE.Mesh(g, mat); m.position.y = y; return m;
+}
+// 街の建物を透かす（真上から敷き詰めを見せる間）。材質は建物どうしで共有なので、材質だけ変える
+let cityFaded = null;
+function fadeCity(on) {
+  const list = [...city.mats.wall, ...city.mats.store, city.mats.roof].filter(Boolean);
+  if (on && !cityFaded) {
+    cityFaded = list.map((m) => [m, m.transparent, m.opacity, m.depthWrite]);
+    for (const m of list) { m.transparent = true; m.opacity = 0.12; m.depthWrite = false; m.needsUpdate = true; }
+  } else if (!on && cityFaded) {
+    for (const [m, t, o, d] of cityFaded) { m.transparent = t; m.opacity = o; m.depthWrite = d; m.needsUpdate = true; }
+    cityFaded = null;
+  }
+}
+// 真上から見下ろす（形の全体が入る高さ）
+function topView(minx, minz, maxx, maxz) {
+  const cx = (minx + maxx) / 2, cz = (minz + maxz) / 2;
+  const half = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const Hh = Math.max((maxz - minz) / 2 / half, (maxx - minx) / 2 / (half * camera.aspect)) * 1.25 + 60;
+  startTween(cx, cz + Hh * 0.03, Hh, cx, ground3(cx, cz), cz);
+}
+function tileArea(P, meta) {
+  kit.clear();
+  SINK.select([]); sinkTarget = 0;   // 建物は地面へ沈めて、足元の形だけ薄く残す（真上から敷き詰めが見えるように）
+  fadeCity(true);
+  showHighlight(null);   // 選んだ建物の橙の箱も消す（真上からは足元の形とマスだけ）
+  const s = Math.sqrt(unit.area), A = polyArea(P), ratio = A / unit.area;
+  let minx = 1e9, maxx = -1e9, minz = 1e9, maxz = -1e9;
+  for (const [x, z] of P) { minx = Math.min(minx, x); maxx = Math.max(maxx, x); minz = Math.min(minz, z); maxz = Math.max(maxz, z); }
+  // マスは形の北西の角から（端から敷き詰める）
+  const cells = [];
+  for (let j = 0; minz + j * s < maxz; j++) for (let i = 0; minx + i * s < maxx; i++) {
+    const x0 = minx + i * s, z0 = minz + j * s, c = clipRect(P, x0, z0, x0 + s, z0 + s);
+    if (c.length < 3) continue;
+    const a = polyArea(c);
+    if (a < 1e-3) continue;
+    cells.push({ i, j, x0, z0, c, f: Math.min(a / (s * s), 1) });
+  }
+  const full = cells.filter((c) => c.f > 0.999).length;   // まるごとのマスの数（カードの説明用）
+  // 測る形の外周（赤い線）
+  const rim = new THREE.Group();
+  const rw = Math.max(1.5, s / 40);
+  for (let k = 0; k < P.length; k++) {
+    const a = P[k], b = P[(k + 1) % P.length];
+    rim.add(ribbon([a, b], 0, Math.hypot(b[0] - a[0], b[1] - a[1]), rw, 2.4, outlineMat));
+  }
+  scene.add(rim); kit.live.push({ kind: 'static', root: rim, t: 0 });
+  const gy = (x, z) => (meta.flatY ?? ground3(x, z));
+  // どのマスにもドームが北から順に降る。欠けたマスでは、着いたら形の境で切り、外に出た分（ドームとマス）は淡くして消す。
+  // 数は、着いたマスの中身の分だけ増える（まるごと +1、欠けたマス +割合）。最後に足す段は無い
+  if (meta.ward) {   // 本物の東京ドームのマスから、外へ輪のように
+    const dc = (c) => Math.hypot(c.x0 + s / 2 - fit.cx, c.z0 + s / 2 - fit.cz);
+    cells.sort((a, b) => dc(a) - dc(b));
+    const k = cells.findIndex((c) => c.f > 0.999); if (k > 0) cells.unshift(...cells.splice(k, 1));
+  }
+  const slow = meta.ward ? 6 : 0;                                   // 区：最初の数個はゆっくり（1 個の大きさが分かるように寄りで見せる）
+  const interval = THREE.MathUtils.clamp((meta.ward ? 14 : 9) / Math.max(cells.length, 1), 0.012, 0.35);
+  const delayOf = (q) => (meta.ward ? 1.2 : 0.8) + (q < slow ? q * 0.6 : slow * 0.6 + (q - slow) * interval * (1.6 - 1.2 * (q - slow) / Math.max(cells.length - slow, 1))) + (meta.ward && q === cells.length - 1 ? 1.2 : 0);   // だんだん速く、最後の 1 個だけ遅く
+  const dropFrom = Math.max(260, s * 3), tFallN = Math.sqrt(2 * dropFrom / 260);   // 落ちるのにかかる時間（DropKit の G = 260）
+  const tAll = delayOf(cells.length - 1) + tFallN;                    // 最後の 1 個が着く頃
+  // ドームの印：マスの中に収まる大きさ（数えるのはマス。ドームの足元の形はマスと同じ広さだが四角ではないため）
+  const dm = DOME.make(); const k0 = 0.8 * s / (2 * Math.max(fit.ax, fit.az));
+  const mini = { R: s * 0.4, make: () => { const d = dm.clone(); d.scale.set(fit.ax * k0, fit.h * k0, fit.az * k0); return d; } };
+  let landed = 0, sum = 0, partial = 0;
+  const fadeOut = (obj, T = 0.8) => {   // 切った外側：淡い無彩色にして消す（赤は使わない）
+    const mats = [];
+    obj.traverse((m) => { if (m.isMesh) { m.material = [].concat(m.material).map((x) => { const y = x.clone(); y.transparent = true; y.opacity = OFF_OPACITY; y.depthWrite = false; y.map = null; y.color?.set(OFF_COLOR); if (y.emissive) y.emissive.set('#000000'); mats.push(y); return y; }); m.castShadow = false; } });
+    kit.live.push({ kind: 'custom', root: new THREE.Group(), t: 0, update(t) { const o = OFF_OPACITY * THREE.MathUtils.clamp(1 - (t - 0.3) / T, 0, 1); for (const y of mats) y.opacity = o; if (o <= 0) obj.visible = false; } });
+  };
+  cells.forEach((c, q) => {
+    const y = gy(c.x0 + s / 2, c.z0 + s / 2);
+    const isFull = c.f > 0.999;
+    const grp = new THREE.Group();
+    grp.add(flatMesh(c.c, y + 1.6, tileMats[(c.i + c.j) % 2]));
+    grp.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(c.c.map(([x, z]) => new THREE.Vector3(x, y + 1.8, z))), tileLineMat));
+    let off = null;
+    if (!isFull) { off = flatMesh([[c.x0, c.z0], [c.x0 + s, c.z0], [c.x0 + s, c.z0 + s], [c.x0, c.z0 + s]], y + 1.0, tileOffMat.clone()); off.visible = false; scene.add(off); kit.live.push({ kind: 'static', root: off, t: -1e9 }); }
+    grp.visible = false; scene.add(grp);
+    kit.live.push({ kind: 'static', root: grp, t: -1e9 });
+    kit.drop({ unit: mini, x: c.x0 + s / 2, z: c.z0 + s / 2, yLand: y + 1.6, delay: delayOf(q), dropFrom,
+      onLand: (st) => {
+        grp.visible = true;
+        sum += c.f;
+        effect.count = Math.floor(sum + 1e-9);
+        if (isFull) { landed++; if (landed < 40 || landed % 10 === 0) { SND.thump(0.5); SND.tick(landed); } }
+        else {
+          partial++; if (partial < 6) fracSound();
+          off.visible = true; fadeOut(off, 1.0);          // マスの外に出た分
+          fadeOut(st.root, 0.6);                          // 境で切ったドーム（数えるのは残ったマスの割合）
+        }
+      } });
+  });
+  const dur = tAll + 1.0;
+  const tFull = tAll;
+  const cx = (minx + maxx) / 2, cz = (minz + maxz) / 2, yC = ground3(cx, cz);
+  effect = {
+    kind: meta.ward ? 'ward' : 'size', tiled: true, ward: meta.ward, C: new THREE.Vector3(cx, yC, cz), top: yC + 2, x: cx, z: minz, count: 0, ratio, n: Math.floor(ratio), t: 0, val: A, dur,
+    rec: meta.rec, isDome: meta.isDome, bx: cx, bz: cz, btop: yC, bname: null, cells: cells.length, full, labUp: 4, minx, maxx, minz, maxz,
+  };
+  renderCard();
+  // マスの並び全体（はみ出して切ったマスも入れる）が入るように見下ろす
+  let gx = minx, gz = minz;
+  for (const c of cells) { gx = Math.max(gx, c.x0 + s); gz = Math.max(gz, c.z0 + s); }
+  if (meta.ward) {
+    // 1) 最初に降るマスへ寄る（ドーム 1 個の大きさが分かる）→ 2) 引いて区ぜんぶを斜めから → 3) 埋まり切ったら真上
+    const c0 = cells[0], x0 = c0.x0 + s / 2, z0 = c0.z0 + s / 2, y0 = gy(x0, z0);
+    // 街の中の低い位置から見上げる（ドーム 1 個が画面の 4 割以上）。この間は 3D の街を見せ、引く時に区の地図へ
+    const lx = x0 + s * 0.3, lz = z0 + s * 1.5;
+    view.eye = 95; lookAtFrom(lx, lz, x0, ground3(x0, z0) + 45, z0);
+    startTween(lx, lz, 93.4, x0, ground3(x0, z0) + 45, z0);
+    city.group.visible = true; if (wardData?.layer) wardData.layer.visible = false; fadeCity(false); sinkTarget = 1;
+    const cx2 = (minx + gx) / 2, cz2 = (minz + gz) / 2, span = Math.max(gx - minx, gz - minz);
+    const tPull = delayOf(Math.min(slow, cells.length - 1)) + tFallN;
+    let st = 0;
+    kit.live.push({ kind: 'custom', root: new THREE.Group(), t: 0, update(t) {
+      if (st === 0 && t > tPull) { st = 1; startTween(cx2, cz2 + span * 0.62, span * 0.36, cx2, gy(cx2, cz2), cz2 - span * 0.08); tween.T = 3.5; }
+      if (st === 1 && t > tPull + 1.2 && city.group.visible) { city.group.visible = false; if (wardData?.layer) wardData.layer.visible = true; }
+      if (st === 1 && t > tFull - 0.4) { st = 2; topView(minx, minz, gx, gz); }
+    } });
+  } else topView(minx, minz, gx, gz);
+}
+
+// ---------- 区ぜんぶ（文京区）：広さは敷き詰め、体積は建物を全部足してドームを降らせる ----------
+// 区の建物と境は data/ward_bunkyo.json（区の比べを選んだ時だけ読む。形：{ name, poly:[[x,y]...], vol, n, area, source }、
+// 座標は city.json と同じ）。無い時は、読み込んだ範囲の文京区の建物で仮の区を作る（境は建物の外周の凸包。本物の区の境ではない）
+let wardData = null;
+async function loadWard() {
+  if (wardData) return wardData;
+  try {
+    const r = await fetch('data/ward_bunkyo.json');
+    if (r.ok) {
+      const w = await r.json();
+      wardData = { name: w.name ?? '文京区', poly: w.poly.map(([x, y]) => [x, -y]), vol: w.vol, n: w.n, areaOfficial: w.area_official_m2 ?? null, src: w.source ?? '', real: true, layer: wardLayer(w) };
+      return wardData;
+    }
+  } catch {}
+  const ids = [], pts = [];
+  let vol = 0;
+  data.buildings.forEach((b, i) => { if ((b.town ?? '').startsWith('文京区')) { ids.push(i); vol += b.vol; for (const [x, y] of b.rings[0]) pts.push([x, -y]); } });
+  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], hi = [];
+  for (const p of pts) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (const p of [...pts].reverse()) { while (hi.length >= 2 && cr(hi[hi.length - 2], hi[hi.length - 1], p) <= 0) hi.pop(); hi.push(p); }
+  wardData = { name: '文京区（仮）', poly: lo.slice(0, -1).concat(hi.slice(0, -1)), ids, vol, n: ids.length, real: false };
+  return wardData;
+}
+// 区ぜんぶの軽い絵：平らな地面と、建物の足元の形（箱は立てない）。読み込んだ範囲の街の代わりに出す
+const WARD_Y = ground3(fit.cx, fit.cz) + 0.5;   // 区の平らな地面の高さ（東京ドームの足元にそろえる。街の中から見上げる時に埋もれないよう）
+function wardLayer(w) {
+  const g = new THREE.Group();
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), new THREE.MeshStandardMaterial({ color: FILM ? '#8a867f' : '#cfcac0', roughness: 1 }));
+  plane.rotation.x = -Math.PI / 2; plane.position.y = WARD_Y - 4;   // 遠くから見ても足元の形とちらつかないよう離す plane.receiveShadow = true;
+  g.add(plane);
+  const pos = [], dist = [], dists = [];
+  for (const ring of w.rings) {
+    if (ring.length < 3) continue;
+    const pts = ring.map(([x, y]) => new THREE.Vector2(x, -y));
+    let cx = 0, cz = 0; for (const p of pts) { cx += p.x / pts.length; cz += p.y / pts.length; }
+    const dd = Math.hypot(cx - fit.cx, cz - fit.cz); dists.push(dd);
+    const tris = THREE.ShapeUtils.triangulateShape(pts, []);
+    for (const t of tris) for (const k of t) { pos.push(pts[k].x, WARD_Y, pts[k].y); dist.push(dd); }
+  }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('aDist', new THREE.Float32BufferAttribute(dist, 1));
+  // uR より近い建物は灯る（明るい黄みの白、波の先は黄）、遠い建物は暗い灰。uR < 0 の時は今までの色
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uR: { value: -1 }, uBase: { value: new THREE.Color(FILM ? '#b3afa7' : '#a39d92') } },
+    vertexShader: 'attribute float aDist; varying float vD; void main(){ vD = aDist; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: `uniform float uR; uniform vec3 uBase; varying float vD;
+      void main(){
+        vec3 c = uBase;
+        if (uR >= 0.0) {
+          vec3 lit = vec3(0.98, 0.93, 0.78), dark = vec3(0.36, 0.35, 0.33), edge = vec3(0.945, 0.76, 0.196);
+          c = vD < uR ? mix(edge, lit, smoothstep(0.0, 160.0, uR - vD)) : dark;
+        }
+        gl_FragColor = vec4(c, 1.0);
+      }`,
+    side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+  });
+  g.add(new THREE.Mesh(geo, mat));
+  dists.sort((a, b) => a - b);
+  g.userData = { mat, dists };
+  g.visible = false; scene.add(g);
+  return g;
+}
+function wardMode(on) {
+  const L = wardData?.layer;
+  if (!L) return;
+  L.visible = on; city.group.visible = !on;
+}
+async function measureWard() {
+  const w = await loadWard();
+  if (unit.kind === 'route' || unit.kind === 'tower') { unit = DOME; renderUnitChip(); }
+  showHighlight(null);
+  if (mode === 'area') { wardMode(true); return tileArea(w.poly, { ward: w, flatY: w.real ? WARD_Y : null }); }
+  if (mode !== 'vol') { mode = 'vol'; for (const o of document.querySelectorAll('#modes button')) o.classList.toggle('on', o.dataset.m === 'vol'); }
+  kit.clear();
+  SINK.select([]); sinkTarget = 0;   // 建物が全部地面に沈み、その分のドームが降ってくる
+  const ratio = w.vol / unit.vol;
+  let minx = 1e9, maxx = -1e9, minz = 1e9, maxz = -1e9;
+  for (const [x, z] of w.poly) { minx = Math.min(minx, x); maxx = Math.max(maxx, x); minz = Math.min(minz, z); maxz = Math.max(maxz, z); }
+  const right = new THREE.Vector3(1, 0, 0), back = new THREE.Vector3(0, 0, 1);
+  const sp = 2.08 * unit.R, cols = 10;
+  const total = Math.ceil(ratio - 1e-9), rows = Math.min(10, Math.ceil(total / cols));
+  const ox = (minx + maxx) / 2 - (cols - 1) * sp / 2, oz = (minz + maxz) / 2 - (rows - 1) * sp / 2;
+  const plan = dropPlan('vol', ratio, ox, oz, right, back, true);
+  const dur = runDrops(plan, 'vol');
+  const yL = ground3(ox, oz);
+  const C = new THREE.Vector3(ox + (cols - 1) * sp / 2, yL + plan.height / 2, oz + (rows - 1) * sp / 2);
+  effect = { kind: 'ward', ward: w, C, top: yL + plan.height, x: C.x, z: C.z, count: 0, ratio, n: plan.n, t: 0, val: w.vol, dur, shown: plan.shown, bx: C.x, bz: C.z, btop: 0, bname: null, rows, cols, sp, ox, oz };
+  renderCard();
+  const boxes = plan.drops.map((d) => [d.x, d.z, unit.R, d.y, d.y + unit.h]);
+  frameView(boxPoints(boxes), C.x, C.z, C.y, 900);   // 高い所から斜めに見下ろす（10 個ずつの列が数えられるように）
+}
+
 // ---------- カード・一言・物差しの切り替え ----------
 function sentence() {
   if (!effect) return '';
   const e = effect, r = fmt(e.ratio);
+  if (e.kind === 'ward') return e.tiled ? `${e.ward.name}の広さ（土地）は、${unit.full}の足元 ${r}${ctrOf()}。` : `${e.ward.name}の建物の体積を全部足すと、${unit.full} ${r}${ctrOf()}。`;
   if (e.kind === 'town') return `${e.town.name}の建物の${MODE_NAME[mode]}を全部足すと、${unit.full} ${r}${ctrOf()}。`;
   if (e.kind === 'path') {
     const what = e.straight ? `${e.from}から${e.to}まで（直線 ${num(Math.round(e.val))} m）` : `${e.title}（${num(Math.round(e.val))} m）`;
     if (unit.kind === 'route' && e.view === 'straight') return `${what}は、まっすぐにすると ${unit.full}の ${r}本分。`;
-    if (unit.kind === 'tower') return `${what}は、立てると ${unit.full}の ${r}本分。`;
+    if (unit.kind === 'tower') return `${what}は、${unit.full}を倒して並べると ${r}本分。`;
     return unit.kind === 'route' ? `${what}は、${unit.full}の ${r}倍。` : `${what}は、${unit.name}を倒して並べると ${r}${ctrOf()}。`;
   }
   const nm = e.isDome ? '東京ドーム' : nameOf(e.rec);
@@ -971,7 +1336,14 @@ function renderCard() {
   const e = effect;
   const unitVal = unit.kind === 'route' ? `${num(Math.round(unit.len))} m` : unit.kind === 'tower' ? `高さ ${num(unit.h)} m` : { h: `${num(unit.h)} m`, area: `${num(unit.area)} m²`, vol: `${man(unit.vol)} m³`, dist: `高さ ${num(unit.h)} m` }[mode];
   let title, meta, what, rows, extra = '', btn1 = '', destSel = '';
-  if (e.kind === 'town') {
+  if (e.kind === 'ward') {
+    const w = e.ward;
+    title = w.name;
+    meta = e.tiled ? `区の境の中に、足元と同じ広さのマスを敷き詰める（${e.cells} マス）` : `建物 ${num(w.n)} 棟（PLATEAU）`;
+    what = e.tiled ? '区の広さ（土地）は' : '建物の体積を全部足すと';
+    rows = [[e.tiled ? '広さ' : '体積の合計', e.tiled ? `${num(Math.round(e.val))} m²` : `${man(e.val)} m³`]];
+    extra = w.real ? `<div class="note">${w.src}</div>` : '<div class="note">仮の区：読み込んだ範囲にある文京区の建物と、その外周（本物の区の境ではありません）。</div>';
+  } else if (e.kind === 'town') {
     title = e.town.name;
     meta = `建物 ${e.town.ids.length} 棟（PLATEAU の住所で集計）`;
     what = `建物の${MODE_NAME[mode]}を全部足すと`;
@@ -980,8 +1352,8 @@ function renderCard() {
   } else if (e.kind === 'path') {
     title = e.title;
     meta = e.straight ? '直線（駅はホームの中心、国土数値情報）' : `なぞった道（点 ${e.path.length} 個）`;
-    what = unit.kind === 'route' ? (e.view === 'straight' ? `まっすぐにすると、${unit.full}の` : `${unit.full}と比べると`) : unit.kind === 'tower' ? `道を立てると、${unit.name}の高さの` : `${unit.name}を倒して並べると`;
-    if (unit.kind === 'tower') extra += `<div class="note">${unit.tower.name}は PLATEAU の読み込んだ範囲の外なので、高さは公式の値を使い、近くの空き地に見た目のための模型を立てています。</div>`;
+    what = unit.kind === 'route' ? (e.view === 'straight' ? `まっすぐにすると、${unit.full}の` : `${unit.full}と比べると`) : unit.kind === 'tower' ? `${unit.name}を倒して並べると` : `${unit.name}を倒して並べると`;
+    if (unit.kind === 'tower') extra += `<div class="note">${unit.tower.name}は PLATEAU の読み込んだ範囲の外なので、高さは公式の値を使い、見た目のための簡単な模型を倒して並べています。</div>`;
     rows = [['長さ', `${e.straight ? '直線 ' : ''}${num(Math.round(e.val))} m`]];
     if (e.list) destSel = `<div class="rowsel"><span>行き先</span><select id="dest">${e.list.slice(0, 8).map((o) => `<option ${o.s.name === e.to ? 'selected' : ''}>${o.s.name}</option>`).join('')}</select></div>`;
     if (!e.straight && !(unit.kind === 'route' && unit.pts === e.path)) btn1 = '<button id="bRoute">この道を物差しにする</button>';
@@ -1167,6 +1539,7 @@ $('tGo').onclick = () => {
   names.set('東京タワー', { tower: TOWERS.tokyotower });
   for (const s of stations) names.set(s.name, { station: s });
   for (const t of towns.keys()) names.set(t, { town: t });
+  names.set('文京区', { ward: true });
   $('qlist').innerHTML = [...names.keys()].sort((a, b) => a.localeCompare(b, 'ja')).map((n) => `<option value="${n}"></option>`).join('');
   const go = () => {
     const v = $('q').value.trim();
@@ -1180,7 +1553,7 @@ $('tGo').onclick = () => {
       else { $('q').value = ''; $('q').placeholder = `行き先：${destName}（建物を選ぶと距離を測る）`; }
       return;
     }
-    compare(hit.town ? { town: hit.town } : hit.tower ? { tower: hit.tower } : hit.dome ? { dome: true } : { rec: hit.rec });
+    compare(hit.ward ? { ward: true } : hit.town ? { town: hit.town } : hit.tower ? { tower: hit.tower } : hit.dome ? { dome: true } : { rec: hit.rec });
     $('q').value = '';
   };
   $('q').addEventListener('change', go);
@@ -1245,17 +1618,25 @@ function step(dt) {
   }
 
   kit.update(dt);
+  // 本物の位置のドームも、比べる間は街と一緒に地面へ沈める。東京ドームが物差しの時は、街が戻っても隠したまま
+  // （降らせたドームと数が合うように）。比べる相手がドーム自身の時は残す。比べるのをやめると戻る
+  {
+    const hide = !!effect && !effect.isDome && (unit === DOME || sinkTarget < 1);   // ドーム以外が物差しの時は、周りの街と一緒に沈めるだけ
+    domeK = hide ? Math.max(0, domeK - dt * 2.2) : Math.min(1, domeK + dt * 1.4);
+    realDome.scale.y = fit.h * Math.max(domeK, 0.001); realDome.visible = domeK > 0.002;
+  }
   {
     const u = SINK.uSink.value, k = sinkTarget < u ? 2.2 : 1.4;
     SINK.uSink.value = sinkTarget < u ? Math.max(sinkTarget, u - dt * k) : Math.min(sinkTarget, u + dt * k);
     gtao.enabled = bokeh.enabled = !LITE && SINK.uSink.value > 0.995;
+    if (FILM) bokeh.enabled = false;
   }
 
   // ピントは見ている対象へ。歩いている時は少し先（通りの中ほど）に合わせ、遠くの街はやわらかくぼかす
   const want = effect ? camera.position.distanceTo(effect.C) : (view.mode === 'eye' ? 40 : camera.position.distanceTo(focus));
   curFocus += (want - curFocus) * Math.min(1, dt * 3);
   // 遠くから見下ろす時に街が霞で白く飛ばないよう、見ている物までの距離で霞を薄める
-  scene.fog.density = 0.00052 * THREE.MathUtils.clamp(450 / Math.max(want, 1), 0.12, 1);
+  scene.fog.density = FILM ? 0.00006 : 0.00052 * THREE.MathUtils.clamp(450 / Math.max(want, 1), 0.12, 1);
   bokeh.uniforms.focus.value = curFocus;
 
   // 影の範囲を視点の前に合わせる
@@ -1380,4 +1761,16 @@ window.__dome = {
   setRecording: (v) => { recording = v; document.body.classList.toggle('clean', v); }, get tween() { return tween; },
   setUnit, unitFromRec, DOME, TOWERS, towerUnit, setFracMode, setCompareMode, trace, startTrace, endTrace, layPath, routeUnit, towns, setDest: (n) => { destName = n; }, get unit() { return unit; }, get effect() { return effect; }, restore,
   pickAt: (x, y) => pick({ clientX: x, clientY: y }),
+  addTracePt: (x, z) => { trace.pts.push([x, z]); drawTrace(); }, orbit, realDome, fit, setFlat,
+  showWard: async (on = true) => { await loadWard(); wardMode(on); return wardData; },   // 区の足元の地図だけを出す（比べない）
+  markRing: (x, z, r) => {   // 主役の足元の黄の輪（動画の書き出し用）
+    const m = new THREE.Mesh(new THREE.RingGeometry(r * 0.86, r, 64), new THREE.MeshBasicMaterial({ color: '#F1C232', side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -12 }));
+    m.rotation.x = -Math.PI / 2; m.position.set(x, ground3(x, z) + 0.6, z); scene.add(m); return m;
+  },
+  wardGlow: (R) => {   // 東京ドームから半径 R [m] の中の建物を灯す。灯った棟数を返す（動画の書き出し用）
+    const u = wardData?.layer?.userData; if (!u) return 0;
+    u.mat.uniforms.uR.value = R;
+    let lo = 0, hi = u.dists.length; while (lo < hi) { const m = (lo + hi) >> 1; if (u.dists[m] < R) lo = m + 1; else hi = m; }
+    return lo;
+  },   // 動画の書き出し用（なぞる点を座標で足す）
 };

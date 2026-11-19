@@ -1,7 +1,7 @@
 // PLATEAU 基準の東京ドーム（物差し）の形と、降らせる・縮める演出。
 // 形は見た目のための近似（角の丸い四角の土台に、空気膜の屋根）。数字は PLATEAU の値を使う。
 import * as THREE from 'three';
-import { cutUnit, cutOffset } from './cut.js';
+import { cutUnit, cutOffset, OFF_OPACITY } from './cut.js';
 
 // 角の丸い四角（超楕円 n=4）の半径
 const SE_N = 4;
@@ -256,9 +256,9 @@ export class DropKit {
     const e = 1 - Math.pow(1 - Math.min(t / 0.45, 1), 3);
     const drift = e + Math.max(0, t - 0.45) * 0.5;
     s.off.position.copy(s.offBase).addScaledVector(s.cutDir, s.sep * drift);
-    const op = THREE.MathUtils.clamp(1 - (t - 0.55) / 0.6, 0, 1);
+    const op = OFF_OPACITY * THREE.MathUtils.clamp(1 - (t - 1.2) / 0.8, 0, 1);   // 切った瞬間から薄く、1.2 秒見せてから消す
     for (const m of s.off.userData.fadeMats) m.opacity = op;
-    if (t > 0.55) for (const m of s.off.children) m.castShadow = false;
+    for (const m of s.off.children) m.castShadow = false;
     if (op <= 0) { s.off.parent?.remove(s.off); s.phase = 'rest'; }
   }
 }
