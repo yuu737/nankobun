@@ -211,7 +211,8 @@ export function cutUnit(obj, shape, n, d) {
     const cg = capGeometry(shape, planeLocal);
     if (cg) {
       const cm = fade ? capMat.clone() : capMat;
-      if (fade) { cm.transparent = true; mats.push(cm); }
+      // 消えていく側の切り口は赤にしない（半透明の赤は空と混ざってピンクに見えるため、地の色で塞ぐ）
+      if (fade) { cm.color.set('#e4dfd6'); cm.transparent = true; mats.push(cm); }
       grp.add(new THREE.Mesh(cg, cm));
     }
     if (!fade && Math.abs(planeLocal.normal.y) > 0.9) {
