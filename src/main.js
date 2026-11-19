@@ -107,6 +107,7 @@ composer.addPass(grade);
 const smaa = new SMAAPass(innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio());
 composer.addPass(smaa);
 
+let recording = false;   // 書き出し中は画面の大きさを変えない（読み込み中の resize より先に宣言する）
 addEventListener('resize', () => {
   if (recording) return;
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -1352,7 +1353,6 @@ async function capture(name, w = 960, caption = '') {
 }
 // 動画用：sec 秒ぶんを 1 コマずつ描いて開発サーバーへ送る（captures/rec_<name>/）。opts.yawRate [rad/s] でゆっくり見回す
 const recIndex = {};
-let recording = false;
 async function record(name, sec, opts = {}) {
   const fps = opts.fps ?? 30, w = opts.width ?? 1920;
   let i = recIndex[name] ?? 0;
