@@ -651,11 +651,13 @@ function layPath(P, meta) {
   if (unit.kind === 'tower') {
     if (P.length > 2) {
       const wT = THREE.MathUtils.clamp(pathLen(P) / 90, 6, 16);
+      const curved = ribbon(P, 0, pathLen(P), wT, 0.8, tapeMat);   // なぞった道（黄の帯）は地図に残す
+      scene.add(curved); kit.live.push({ kind: 'static', root: curved, t: 0 });
       meta = { ...meta, traced: P };
       const Ps = straightLine(P), L0 = pathLen(P), N = Math.max(2, Math.ceil(L0 / 4));
       const cv = [], st = [];
       for (let k = 0; k <= N; k++) { const a = pathAt(P, L0 * k / N), b = pathAt(Ps, L0 * k / N); cv.push([a.x, a.z]); st.push([b.x, b.z]); }
-      // なぞった黄の帯そのものが、端から順に引っぱられて、ほどけてまっすぐになる（長さは変えない）。曲がった帯は残さない
+      // 黄の帯から赤い線が引き出され、端から順に引っぱられてまっすぐになる（長さは変えない）
       const tape = new THREE.Group(); scene.add(tape);
       let last = -1;
       const sm = (x) => { x = THREE.MathUtils.clamp(x, 0, 1); return x * x * (3 - 2 * x); };
@@ -664,7 +666,7 @@ function layPath(P, meta) {
         if (Math.abs(g - last) < 1e-3) return; last = g;
         tape.clear();
         const Q = cv.map((c, k) => { const e = sm(g * 1.6 - (k / N) * 0.6); return [c[0] + (st[k][0] - c[0]) * e, c[1] + (st[k][1] - c[1]) * e]; });
-        tape.add(ribbon(Q, 0, pathLen(Q), wT, 0.8, tapeMat));
+        tape.add(ribbon(Q, 0, pathLen(Q), wT * 0.8, 1.2, redMat));
       } });
       towerDelay = 2.0;   // まっすぐになってから寝かせ始める
       P = Ps;
